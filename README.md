@@ -1,15 +1,6 @@
 # PyXspec
 
-A Python wrapper for X-ray spectral analysis using PyXSpec/XSPEC. Provides a clean, object-oriented interface for fitting X-ray spectra from various missions (Swift-XRT, NICER, NuSTAR, XMM-Newton, etc.).
-
-## Features
-
-- **Simple API**: Clean Python interface to PyXSpec functionality
-- **Model Management**: Easy configuration and reuse of spectral models
-- **Automated Workflow**: Handles data loading, fitting, error calculation, and flux computation
-- **Result Export**: Saves fit results to YAML and plot data to CSV
-- **Flexible Plotting**: Generates PostScript plots and extracts plot data for custom visualization
-- **Multi-Mission Support**: Works with PHA files from any X-ray mission
+A Python wrapper for X-ray spectral analysis using PyXSpec.
 
 ## Requirements
 
@@ -179,8 +170,7 @@ success = grppha(
         "bad 0-29",           # Flag channels 0-29 as bad
         "group min 20",       # Group to minimum 20 counts
     ],
-    output_file="spectrum_grp.pha",  # Optional: specify output
-    overwrite=False         # Set True to modify in place
+    out_file="spectrum_grp.pha",  # Optional: specify output
 )
 ```
 
@@ -264,74 +254,13 @@ Model configuration manager.
 Pre-defined common X-ray spectral models.
 
 **Methods:**
-- `absorbed_powerlaw(nH, PhoIndex, freeze_nH)`: tbabs*powerlaw
-- `absorbed_broken_powerlaw(nH, PhoIndex1, PhoIndex2, freeze_nH)`: tbabs*bknpower
-- `absorbed_logparabola(nH, alpha, beta, freeze_nH)`: tbabs*logpar
+- `absorbed_powerlaw(nH, PhoIndex, freeze_nH)`: tbabs\*powerlaw
+- `absorbed_broken_powerlaw(nH, PhoIndex1, PhoIndex2, freeze_nH)`: tbabs\*bknpower
+- `absorbed_logparabola(nH, alpha, beta, freeze_nH)`: tbabs\*logpar
 
-## Available Plot Types
-
-- `data`: Counts vs channel/energy
-- `ldata`: Log counts vs channel/energy
-- `eemodel`: E*F(E) model
-- `eeufspec`: E²F(E) unfolded spectrum
-- `eufspec`: E*F(E) unfolded spectrum
-- `model`: Model counts
-- `ufspec`: Unfolded spectrum F(E)
-- `ratio`: Data/Model ratio
-- `delchi`: (Data - Model) / Error
-- `residuals`: Data - Model
-
-## Troubleshooting
-
-### Import Error: PyXSpec not available
-```
-ImportError: PyXSpec not available. Install HEASOFT to use this module.
-```
-**Solution**: Install HEASOFT and initialize it with `heainit`
-
-### Response file not found
-```
-***Error: Response file not found
-```
-**Solution**: Ensure ARF and RMF paths are correctly set in your PHA file header. Check with:
-```bash
-fkeyprint infile=spectrum.pha keynam=RESPFILE
-fkeyprint infile=spectrum.pha keynam=ANCRFILE
-```
-
-### Fit convergence issues
-If fit doesn't converge, try:
-1. Adjusting initial parameter values
-2. Freezing some parameters
-3. Using Cash statistic (`stat_method="cstat"`) for low-count data
-4. Checking energy range is appropriate
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
-
-## License
-
-MIT License - see LICENSE file for details.
-
-## Citation
-
-If you use PyXspec in your research, please cite:
-```
-@software{pyxspec,
-  author = {Navaneethnpk},
-  title = {PyXspec: Python wrapper for X-ray spectral analysis},
-  year = {2026},
-  url = {https://github.com/navaneethnpk/PyXspec}
-}
-```
 
 ## Acknowledgments
 
 This package is built on top of:
 - **XSPEC**: X-ray spectral fitting package by NASA/HEASARC
 - **PyXSpec**: Python interface to XSPEC
-
-## Contact
-
-For questions or issues, please open an issue on GitHub: https://github.com/navaneethnpk/PyXspec/issues

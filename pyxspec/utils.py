@@ -18,9 +18,8 @@ logger = setup_logger(__name__)
 def grppha(
     pha_file: str,
     commands: List[str],
-    output_file: Optional[str] = None,
+    out_file: Optional[str] = None,
     log_file: Optional[str] = None,
-    overwrite: bool = False,
 ) -> bool:
     """
     Run GRPPHA to modify a PHA file with custom commands.
@@ -31,13 +30,10 @@ def grppha(
         Input PHA filename (e.g., "spectrum.pi" or "spectrum.pha")
     commands : List[str]
         List of GRPPHA commands to execute (e.g., ["bad 0-29", "group min 20"])
-    output_file : str, optional
+    out_file : str, optional
         Output PHA filename. If None, creates filename with '_grp' suffix.
     log_file : str, optional
         Log filename. If None, creates filename with '_grppha.log' suffix.
-    overwrite : bool, optional
-        If True, overwrites the input file instead of creating new output file.
-        Default is False.
 
     Returns
     -------
@@ -53,11 +49,10 @@ def grppha(
 
     # Determine output and log filenames
     file_extension = pha_path.suffix
-    if overwrite:
-        output_filename = pha_file
-        logger.info(f"Overwrite mode: will modify {pha_file} in place")
-    elif output_file is not None:
-        output_filename = output_file
+    if out_file is not None:
+        output_filename = out_file
+        if output_filename == pha_file:
+            logger.info(f"Overwrite mode: will modify {pha_file} in place")
     else:
         output_filename = pha_file.replace(file_extension, f"_grp{file_extension}")
     if log_file is not None:
