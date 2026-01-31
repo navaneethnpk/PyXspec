@@ -7,7 +7,7 @@ name = "pyxspec"
 version = "0.1.0"
 description = "X-ray spectral analysis using PyXSpec"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 dependencies = [
     "matplotlib>=3.0.0",

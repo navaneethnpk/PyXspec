@@ -162,8 +162,3 @@ class CommonModels:
         model.set_parameter("logpar.alpha", alpha, frozen=False)
         model.set_parameter("logpar.beta", beta, frozen=False)
         return model
-
-
-# TODO: Implement calculate_nh_from_command() function
-# TODO: Add support for min/max/delta parameters in set_parameter()
-# TODO: Add model validation before loading into XSpec

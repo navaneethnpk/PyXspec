@@ -1,6 +1,4 @@
 """
-Logging utilities for bzanalysis package.
-
 This module provides a centralized logging configuration for the entire package.
 """
 
@@ -30,10 +28,19 @@ def setup_logger(
     """
     logger = logging.getLogger(name)
     
-    # For module loggers (child loggers), don't set level or add handlers
-    # They will inherit from parent and propagate to root
+    # For module loggers (child loggers), ensure root has a handler
     if '.' in name:
-        # Don't set level - let it inherit from parent/root
+        root = logging.getLogger()
+        # If root has no handlers, configure it with basic console output
+        if not root.hasHandlers():
+            console_handler = logging.StreamHandler(sys.stdout)
+            formatter = logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                datefmt="%Y-%m-%dT%H:%M:%S",
+            )
+            console_handler.setFormatter(formatter)
+            root.addHandler(console_handler)
+            root.setLevel(logging.INFO)
         return logger
     
     # For root or top-level loggers, set the level

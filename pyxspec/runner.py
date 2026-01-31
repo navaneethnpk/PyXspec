@@ -2,13 +2,12 @@
 PyXSpec Wrapper for X-ray Spectral Analysis.
 
 Generic wrapper for PyXSpec that works with data from multiple X-ray missions:
-Swift-XRT, NICER, NuSTAR, Chandra, XMM-Newton etc.
+Swift-XRT, NICER, NuSTAR, XMM-Newton etc.
 """
 
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
 
-import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 
@@ -29,11 +28,10 @@ try:
         Spectrum,
         Xset,
     )
-
-    XSPEC_AVAILABLE = True
-except ImportError:
-    XSPEC_AVAILABLE = False
-    logger.warning("PyXSpec not available. Install HEASOFT to use this module.")
+except ImportError as e:
+    raise ImportError(
+        "PyXSpec not available. Install HEASOFT to use this module."
+    ) from e
 
 
 class XSpecRunner:
@@ -53,17 +51,34 @@ class XSpecRunner:
         Energy range for fitting (min, max) in keV (default: (0.3, 10.0))
     stat_method : str, optional
         Fit statistic method: "chi", "cstat", or "pgstat" (default: "chi")
+    plot_xaxis : str, optional
+        X-axis units for plots: "keV", "Hz", "channel", "angstrom" (default: "keV")
+    plot_rebin : tuple of int, optional
+        Rebinning specification as (minSig, maxNum) for plot display (default: "20 20")
+    plot_types : list of str, optional
+        List of plot types to generate (default: ["eeufspec", "ratio"])
 
     Attributes
     ----------
     pha_file : Path
         Path to the PHA file
     out_dir : Path
-        Output directory
-    en_range : tuple
-        Energy range for analysis
+        Output directory for all results (YAML, CSV, PostScript plots)
+    en_range : tuple of float
+        Energy range (min, max) in keV for analysis
     stat_method : str
-        Fit statistic method
+        Fit statistic method (chi, or cstat)
+    plot_xaxis : str
+        X-axis units for plots
+    plot_rebin : tuple of int
+        Rebinning parameters (minSig, maxNum)
+    plot_types : list of str
+        List of plot types to generate
+
+    Raises
+    ------
+    FileNotFoundError
+        If the specified PHA file does not exist
     """
 
     def __init__(
@@ -72,28 +87,39 @@ class XSpecRunner:
         out_dir: Optional[Union[str, Path]] = None,
         en_range: Tuple[float, float] = (0.3, 10.0),
         stat_method: str = "chi",
+        plot_xaxis: str = "keV",
+        plot_rebin: Tuple[int, int] = (20, 20),
+        plot_types: Optional[list] = None,
     ):
         """Initialize XSpec runner."""
-        if not XSPEC_AVAILABLE:
-            raise ImportError(
-                "PyXSpec is not available. Please install HEASOFT with PyXSpec support."
-            )
-
+        # Validate and set PHA file path
         self.pha_file = Path(pha_file).expanduser().resolve()
         if not self.pha_file.exists():
             raise FileNotFoundError(f"PHA file not found: {self.pha_file}")
 
+        # Set output directory
         if out_dir is None:
             self.out_dir = self.pha_file.parent
         else:
             self.out_dir = Path(out_dir)
             self.out_dir.mkdir(parents=True, exist_ok=True)
 
+        # Store analysis parameters
         self.en_range = en_range
         self.stat_method = stat_method
 
+        # Store plot configuration
+        self.plot_xaxis = plot_xaxis
+        self.plot_rebin = plot_rebin
+        self.plot_types = (
+            plot_types if plot_types is not None else ["eeufspec", "ratio"]
+        )
+
         logger.debug(f"Initialized XSpecRunner for {self.pha_file}")
         logger.debug(f"Energy range: {en_range[0]} - {en_range[1]} keV")
+        logger.debug(
+            f"Plot config: axis={plot_xaxis}, rebin={plot_rebin}, types={self.plot_types}"
+        )
         logger.debug(f"Output directory: {self.out_dir}")
 
     def _setup_xspec(self):
@@ -101,6 +127,7 @@ class XSpecRunner:
         AllData.clear()
         AllModels.clear()
 
+        # Configure output verbosity
         Xset.chatter = 0
         Xset.logChatter = 20
 
@@ -118,16 +145,12 @@ class XSpecRunner:
         logger.debug(f"Loading spectrum: {self.pha_file}")
         spectrum = Spectrum(str(self.pha_file))
 
-        # Ignore bad channels
+        # Ignore bad channels flagged in the PHA file
         AllData.ignore("bad")
 
-        # Apply energy range
+        # Apply energy range: ignore data outside the specified range
         ignore_range = f"**-{self.en_range[0]},{self.en_range[1]}-**"
         spectrum.ignore(ignore_range)
-
-        logger.debug(
-            f"Applied energy filter: {self.en_range[0]}-{self.en_range[1]} keV"
-        )
 
         return spectrum
 
@@ -153,14 +176,16 @@ class XSpecRunner:
         logger.debug(f"Creating model: {model_config.expression}")
         model = Model(model_config.expression)
 
-        # Apply parameter settings
+        # Apply parameter settings from configuration
         for params, config in model_config.parameters.items():
             component_name, param_name = params.split(".")
 
             try:
+                # Access the component and parameter
                 component = getattr(model, component_name)
                 param = getattr(component, param_name)
 
+                # Set parameter value and freeze status
                 param.values = config["value"]
                 param.frozen = config["frozen"]
 
@@ -181,18 +206,60 @@ class XSpecRunner:
     def _perform_fit(self):
         """Perform the spectral fit using configured statistics method."""
 
-        logger.debug("Starting spectral fit...")
+        logger.debug("Starting spectral fit")
 
+        # Configure fit parameters
         Fit.statMethod = self.stat_method
         Fit.nIterations = 100
         Fit.query = "yes"
 
+        # Renormalize model to data and perform fit
+        Fit.renorm()
         Fit.perform()
         Fit.show()
 
-    def _extract_fit_results(self, model: Model) -> Tuple[Dict, Dict]:
+    def _extract_fit_statistics(self) -> Dict:
         """
-        Extract fit statistics and parameter values.
+        Extract fit statistics from the completed fit.
+
+        Returns
+        -------
+        dict
+            Fit statistics including:
+            - statistic: The fit statistic value
+            - testStatistic: Test statistic value
+            - dof: Degrees of freedom
+            - chi2red: Reduced chi-squared (testStatistic/dof)
+            - statMethod: Statistical method used (chi, cstat, etc.)
+            - statTest: Statistical test used
+            - nullhyp: Null hypothesis probability
+            - nVarPars: Number of variable parameters
+        """
+        fit_stats = {
+            "statistic": Fit.statistic,
+            "testStatistic": Fit.testStatistic,
+            "dof": Fit.dof,
+            "chi2red": Fit.testStatistic / Fit.dof if Fit.dof > 0 else np.nan,
+            "statMethod": Fit.statMethod,
+            "statTest": Fit.statTest,
+            "nullhyp": Fit.nullhyp,
+            "nVarPars": Fit.nVarPars,
+        }
+
+        logger.debug(
+            f"Fit statistics: {fit_stats['statMethod']} = {fit_stats['statistic']:.2f}"
+        )
+        logger.debug(
+            f"Test statistic/dof = {fit_stats['testStatistic']:.2f}/{fit_stats['dof']} = {fit_stats['chi2red']:.3f}"
+        )
+        logger.debug(f"Null hypothesis probability: {fit_stats['nullhyp']:.4f}")
+        logger.debug(f"Number of variable parameters: {fit_stats['nVarPars']}")
+
+        return fit_stats
+
+    def _extract_parameter_errors(self, model: Model) -> Dict:
+        """
+        Extract parameter values and errors from the fitted model.
 
         Parameters
         ----------
@@ -201,24 +268,21 @@ class XSpecRunner:
 
         Returns
         -------
-        tuple of dict
-            (fit_statistics, parameters)
-            - fit_statistics: chi2, dof, chi2red
-            - parameters: parameter values, errors, and metadata
+        dict
+            Dictionary of parameter information with keys as parameter indices.
+            Each entry contains:
+            - name: Parameter name
+            - value: Best-fit value
+            - sigma: 1-sigma error
+            - lower_bound: Lower error bound
+            - upper_bound: Upper error bound
+            - frozen: Whether parameter was frozen
         """
-        chi = Fit.statistic
-        dof = Fit.dof
-        chi2red = Fit.testStatistic / dof if dof > 0 else np.nan
-
-        fit_stats = {
-            "statistic": chi,
-            "dof": dof,
-            "chi2red": chi2red,
-        }
-
-        # Extract parameter information
         parameters = {}
+
+        # Iterate through all model parameters
         for i in range(1, model.nParameters + 1):
+            # Calculate confidence intervals (90% by default)
             Fit.error(f"{i}")
             param = AllModels(1)(i)
 
@@ -235,9 +299,8 @@ class XSpecRunner:
             logger.debug(
                 f"Parameter {i} ({param.name}): {param.values[0]:.3e} ± {param.sigma:.3e}"
             )
-        logger.debug(f"Fit statistics: χ²/dof = {chi:.2f}/{dof} = {chi / dof:.2f}")
 
-        return fit_stats, parameters
+        return parameters
 
     def _calculate_flux(self, spectrum: Spectrum) -> Tuple[float, float, float]:
         """
@@ -253,6 +316,7 @@ class XSpecRunner:
         tuple of float
             (flux, lower_error, upper_error) in erg/cm²/s
         """
+        # Calculate flux with 90% confidence errors
         flux_str = f"{self.en_range[0]} {self.en_range[1]} error 100 90"
         AllModels.calcFlux(flux_str)
 
@@ -318,190 +382,104 @@ class XSpecRunner:
         Returns
         -------
         dict
-            Dictionary with 'spectrum' and 'ratio' keys containing plot data
+            Dictionary with keys for each plot type containing plot data.
+            Each plot type contains arrays for x, dx, y, dy, and model (if applicable).
         """
         # Configure plot settings
-        Plot.xAxis = "Hz"
+        Plot.xAxis = self.plot_xaxis
         Plot.xLog = True
         Plot.yLog = True
-        Plot.setRebin(5, 20)
+        Plot.setRebin(self.plot_rebin[0], self.plot_rebin[1])
 
         # Create PostScript plot
         Plot.device = f"{self.out_dir}/{model_config.name}_plot.ps"
-        Plot("eeufspec", "ratio")
+        Plot(*self.plot_types)
 
         # Switch to null device for data extraction
         Plot.device = "/null"
 
-        # Extract spectrum data
-        Plot("eeufspec")
-        spec_data = np.column_stack(
-            [Plot.x(), Plot.xErr(), Plot.y(), Plot.yErr(), Plot.model()]
-        )
+        # Plot types that have model data
+        model_plot_types = [
+            "data",
+            "ldata",
+            "eemodel",
+            "eufspec",
+            "eeufspec",
+            "model",
+            "ufspec",
+            "counts",
+            "lcounts",
+        ]
 
-        # Save to CSV
-        spec_file = self.out_dir / f"{model_config.name}_spectrum.csv"
-        np.savetxt(
-            spec_file,
-            spec_data,
-            delimiter=",",
-            header="energy,energy_err,flux,flux_err,model",
-            comments="",
-        )
-        logger.debug(f"Spectrum data saved to {spec_file}")
+        # Extract data for each plot type
+        plot_data = {}
+        for plot_type in self.plot_types:
+            logger.debug(f"Extracting data for plot type: {plot_type}")
+            Plot(plot_type)
 
-        # Extract ratio data
-        Plot("ratio")
-        ratio_data = np.column_stack([Plot.x(), Plot.xErr(), Plot.y(), Plot.yErr()])
+            # Get basic plot arrays from XSPEC
+            x_data = Plot.x()
+            x_err = Plot.xErr()
+            y_data = Plot.y()
+            y_err = Plot.yErr()
 
-        # Save to CSV
-        ratio_file = self.out_dir / f"{model_config.name}_ratio.csv"
-        np.savetxt(
-            ratio_file,
-            ratio_data,
-            delimiter=",",
-            header="energy,energy_err,ratio,ratio_err",
-            comments="",
-        )
-        logger.debug(f"Ratio data saved to {ratio_file}")
+            # Check if this plot type should have model data
+            has_model = plot_type in model_plot_types
 
-        spectrum_dict = {
-            "x": spec_data[:, 0],
-            "dx": spec_data[:, 1],
-            "y": spec_data[:, 2],
-            "dy": spec_data[:, 3],
-            "model": spec_data[:, 4],
-        }
+            # Build plot_data dictionary and CSV array
+            if has_model:
+                model_data = Plot.model()
+                plot_data[plot_type] = {
+                    "x": x_data,
+                    "dx": x_err,
+                    "y": y_data,
+                    "dy": y_err,
+                    "model": model_data,
+                }
+                data_array = np.column_stack([x_data, x_err, y_data, y_err, model_data])
+                header = "x,dx,y,dy,model"
+            else:
+                plot_data[plot_type] = {
+                    "x": x_data,
+                    "dx": x_err,
+                    "y": y_data,
+                    "dy": y_err,
+                }
+                data_array = np.column_stack([x_data, x_err, y_data, y_err])
+                header = "x,dx,y,dy"
 
-        ratio_dict = {
-            "x": ratio_data[:, 0],
-            "dx": ratio_data[:, 1],
-            "y": ratio_data[:, 2],
-            "dy": ratio_data[:, 3],
-        }
+            # Save to CSV file
+            csv_file = self.out_dir / f"{model_config.name}_{plot_type}.csv"
+            np.savetxt(
+                csv_file,
+                data_array,
+                delimiter=",",
+                header=header,
+                comments="",
+            )
+            logger.debug(f"Saved {plot_type} data to {csv_file}")
 
-        return {
-            "spectrum": spectrum_dict,
-            "ratio": ratio_dict,
-        }
-
-    def _create_plots(self, model_config: ModelManager, data: Dict):
-        """
-        Create publication-quality spectrum and residual plots.
-
-        Parameters
-        ----------
-        model_config : ModelManager
-            Model configuration
-        data : dict
-            Plot data from _extract_plot_data()
-        """
-        fig, (ax1, ax2) = plt.subplots(
-            2, 1, figsize=(8, 8), gridspec_kw={"height_ratios": [3, 1]}, sharex=True
-        )
-
-        # Spectrum plot
-        ax1.errorbar(
-            data["spectrum"]["x"],
-            data["spectrum"]["y"],
-            yerr=data["spectrum"]["dy"],
-            fmt="o",
-            markersize=4,
-            label="Data",
-            color="black",
-            ecolor="gray",
-            elinewidth=1,
-            capsize=1,
-        )
-        ax1.plot(
-            data["spectrum"]["x"],
-            data["spectrum"]["model"],
-            label="Model",
-            color="red",
-            linestyle="-",
-            linewidth=1.0,
-        )
-        ax1.set_xscale("log")
-        ax1.set_yscale("log")
-        ax1.set_ylabel(r"$\nu F \nu$ (erg cm$^{-2}$ s$^{-1}$)", fontsize=12)
-        ax1.legend(loc="best", fontsize=10)
-        ax1.grid(True, alpha=0.2, which="both")
-        ax1.tick_params(
-            labelsize=10,
-            axis="both",
-            which="major",
-            direction="in",
-            top=True,
-            right=True,
-        )
-        ax1.tick_params(
-            axis="both", which="minor", direction="in", top=True, right=True
-        )
-
-        x_min = data["spectrum"]["x"].min()
-        x_max = data["spectrum"]["x"].max()
-        ax1.set_xlim(x_min * 0.8, x_max * 1.2)  # Add 20% padding
-
-        # Ratio plot
-        ax2.errorbar(
-            data["ratio"]["x"],
-            data["ratio"]["y"],
-            yerr=data["ratio"]["dy"],
-            fmt="o",
-            markersize=2,
-            color="black",
-            ecolor="gray",
-            elinewidth=1,
-            capsize=1,
-        )
-        ax2.axhline(1.0, color="red", linestyle="--", linewidth=1.0)
-        ax2.set_xscale("log")
-        ax2.set_xlabel("Energy (Hz)", fontsize=12)
-        ax2.set_ylabel("Ratio", fontsize=12)
-        ax2.tick_params(
-            labelsize=10,
-            axis="both",
-            which="major",
-            direction="in",
-            top=True,
-            right=True,
-        )
-        ax2.tick_params(
-            axis="both", which="minor", direction="in", top=True, right=True
-        )
-
-        # Title
-        fig.suptitle(
-            f"Spectral Fit: {model_config.name} ({self.pha_file.name})",
-            fontsize=12,
-            fontweight="bold",
-        )
-
-        plt.tight_layout()
-
-        # Save
-        plot_file = self.out_dir / f"{model_config.name}_plot.png"
-        plt.savefig(plot_file, dpi=300, bbox_inches="tight")
-        plt.close()
-
-        logger.debug(f"Plot saved to {plot_file}")
+        return plot_data
 
     def _cleanup(self):
         """Clean up XSPEC environment and reset plot settings."""
+        # Reset plot settings to defaults
         Plot.device = "/null"
         Plot.xAxis = "keV"
         Plot.xLog = False
         Plot.yLog = False
 
-        AllData.clear()
+        # AllData.clear()
+        # AllModels.clear()
+
+        # Close log file
         Xset.closeLog()
 
-        logger.debug("XSpec environment cleaned up")
+        logger.debug("XSpec environment cleaned up.")
 
     def run_model(
         self,
         model_config: ModelManager,
-        create_plots: bool = True,
     ) -> Dict:
         """
         Run XSPEC analysis for a single model configuration.
@@ -510,13 +488,12 @@ class XSpecRunner:
         ----------
         model_config : ModelManager
             Model configuration to fit
-        create_plots : bool, optional
-            Whether to create plots (default: True)
 
         Returns
         -------
         dict
             Results dictionary containing:
+
             - model : str
                 Model name
             - fit_statistics : dict
@@ -525,56 +502,58 @@ class XSpecRunner:
                 Parameter values and errors
             - flux : tuple
                 Flux and errors in erg/cm²/s
+            - plot_data : dict
+                Plot data arrays for each plot type
             - success : bool
                 Whether fit succeeded
             - error : str
                 Error message (if failed)
         """
+        pha_name = self.pha_file.name
         try:
-            # Setup
+            # Setup XSPEC environment
             self._setup_xspec()
             log_file = self.out_dir / f"{model_config.name}_xspec.log"
             Xset.openLog(str(log_file))
+            logger.info(f"Analysis started: PHA={pha_name}, Model={model_config.name}")
 
-            logger.debug(f"Starting analysis with model: {model_config.name}")
-
-            # Load data
+            # Load and prepare data
             spectrum = self._load_data()
 
             # Create and configure model
             model = self._create_model(model_config)
 
-            # Perform fit
+            # Perform spectral fit
             self._perform_fit()
 
-            # Extract results
-            fit_stats, parameters = self._extract_fit_results(model)
-
-            # Calculate flux
+            # Extract fit, parameters and flux results
+            fit_stats = self._extract_fit_statistics()
+            parameters = self._extract_parameter_errors(model)
             flux = self._calculate_flux(spectrum)
 
-            # Save results
+            # Save results to YAML
             self._save_results(model_config, fit_stats, parameters, flux)
 
-            # Extract and save plot data
+            # Extract and save plot data to CSV
             plot_data = self._extract_plot_data(model_config)
 
-            # Create plots if requested
-            self._create_plots(model_config, plot_data)
-
-            logger.debug(f"Xspec analysis completed for model: {model_config.name}")
+            logger.info(
+                f"Analysis completed: PHA={pha_name}, Model={model_config.name}"
+            )
 
             return {
                 "model": model_config.name,
                 "fit_statistics": fit_stats,
                 "parameters": parameters,
                 "flux": flux,
+                "plot_data": plot_data,
                 "success": True,
             }
 
         except Exception as e:
-            logger.error(
-                f"Analysis failed for model {model_config.name}: {e}", exc_info=True
+            logger.info(
+                f"Analysis failed: PHA={pha_name}, Model={model_config.name}: {e}",
+                exc_info=True,
             )
             return {
                 "model": model_config.name,
@@ -583,4 +562,5 @@ class XSpecRunner:
             }
 
         finally:
+            # Always clean up, even if analysis failed
             self._cleanup()
